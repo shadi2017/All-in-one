@@ -1,114 +1,81 @@
 import streamlit as st
-import pandas as pd
-from PIL import Image, ImageDraw, ImageFont
-import arabic_reshaper
-from bidi.algorithm import get_display
+from PIL import Image
 import io
 import zipfile
 
-# --- وظائف عامة ---
-def fix_arabic(text):
-    if pd.isna(text) or str(text).strip() == "": return ""
-    reshaper = arabic_reshaper.ArabicReshaper(configuration={'delete_harakat': False, 'support_ligatures': True, 'arabic': True})
-    return get_display(reshaper.reshape(str(text)))
+# إعدادات الصفحة
+st.set_page_config(page_title="برواز الصور - نسخة الويب", layout="wide")
 
-def hex_to_rgb(h):
-    return tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+st.title("📸 إضافة برواز اللوجو للصور (Batch Version)")
+st.info("ملاحظة: هذه النسخة تعمل على الويب. يتم رفع الصور ومعالجتها ثم تحميلها كملف ZIP.")
 
-# --- إعدادات الصفحة ---
-st.set_page_config(page_title="المساعد الذكي", layout="wide")
-tab1, tab2 = st.tabs(["🎓 صانع الشهادات", "📸 برواز الصور المجمع"])
+# --- الوظائف ---
+def make_black_transparent(frame_img):
+    """تحويل اللون الأسود في الفريم لشفاف عشان الصور تبان"""
+    img = frame_img.convert("RGBA")
+    datas = img.getdata()
+    new_data = []
+    for item in datas:
+        # إذا كان اللون أسود أو قريب منه (R,G,B < 45)
+        if item[0] < 45 and item[1] < 45 and item[2] < 45:
+            new_data.append((0, 0, 0, 0)) # شفاف
+        else:
+            new_data.append(item)
+    img.putdata(new_data)
+    return img
 
-# --- Tab 1: صانع الشهادات ---
-with tab1:
-    st.header("صانع الشهادات الديناميكي")
-    col1, col2 = st.columns([1, 2])
+# --- واجهة المستخدم ---
+st.sidebar.header("📁 الملفات")
+frame_file = st.sidebar.file_uploader("1. ارفع الفريم (JPG/PNG)", type=['png', 'jpg', 'jpeg'])
+uploaded_photos = st.sidebar.file_uploader("2. ارفع الصور المراد بروزتها", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+
+if frame_file and uploaded_photos:
+    st.write(f"✅ تم رفع {len(uploaded_photos)} صورة.")
     
-    with col1:
-        tpl_file = st.file_uploader("1. ارفع التيمبلت", type=['png', 'jpg', 'jpeg'], key="tpl")
-        exc_file = st.file_uploader("2. ارفع الإكسيل", type=['xlsx', 'csv'], key="exc")
-        fnt_file = st.file_uploader("3. ارفع الخط (TTF)", type=['ttf'], key="fnt")
-        
-        if tpl_file and exc_file and fnt_file:
-            df = pd.read_excel(exc_file) if exc_file.name.endswith('.xlsx') else pd.read_csv(exc_file)
-            fnt_bytes = fnt_file.read()
-            
-            st.divider()
-            name_col = st.selectbox("عمود الأسماء", df.columns)
-            n_x = st.number_input("الاسم X", value=500)
-            n_y = st.number_input("الاسم Y", value=350)
-            n_size = st.slider("حجم الاسم", 10, 200, 60)
-            n_color = st.color_picker("لون الاسم", "#000000")
-            
-            show_g = st.checkbox("إضافة تقدير؟")
-            g_col, g_x, g_y, g_size, g_color = None, 0, 0, 40, "#333333"
-            if show_g:
-                g_col = st.selectbox("عمود التقدير", df.columns)
-                g_x = st.number_input("التقدير X", value=500)
-                g_y = st.number_input("التقدير Y", value=450)
-                g_size = st.slider("حجم التقدير", 10, 200, 40)
-                g_color = st.color_picker("لون التقدير", "#333333")
+    # معالجة الفريم مرة واحدة
+    raw_frame = Image.open(frame_file)
+    processed_frame = make_black_transparent(raw_frame)
+    
+    # معاينة أول صورة
+    st.divider()
+    st.subheader("👁️ معاينة النتيجة")
+    sample_photo = Image.open(uploaded_photos[0]).convert("RGBA")
+    sample_frame = processed_frame.resize(sample_photo.size, Image.Resampling.LANCZOS)
+    sample_photo.alpha_composite(sample_frame)
+    st.image(sample_photo, caption="شكل أول صورة بعد البروزة", width=600)
 
-    with col2:
-        if tpl_file and exc_file and fnt_file:
-            # المعاينة
-            preview = Image.open(tpl_file).convert("RGB")
-            draw = ImageDraw.Draw(preview)
-            font_n = ImageFont.truetype(io.BytesIO(fnt_bytes), n_size)
-            draw.text((n_x, n_y), fix_arabic(df.iloc[0][name_col]), fill=hex_to_rgb(n_color), font=font_n, anchor="mm")
-            if show_g:
-                font_g = ImageFont.truetype(io.BytesIO(fnt_bytes), g_size)
-                draw.text((g_x, g_y), fix_arabic(df.iloc[0][g_col]), fill=hex_to_rgb(g_color), font=font_g, anchor="mm")
-            st.image(preview, caption="معاينة لأول اسم")
+    if st.button("🚀 ابدأ معالجة الصور وتحميل ملف ZIP"):
+        zip_buffer = io.BytesIO()
+        
+        # إنشاء ملف ZIP في الذاكرة
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            bar = st.progress(0)
+            status = st.empty()
             
-            if st.button("🚀 استخراج الكل (PDF)"):
-                all_pdfs = []
-                bar = st.progress(0)
-                for i, row in df.iterrows():
-                    img = Image.open(tpl_file).convert("RGB")
-                    d = ImageDraw.Draw(img)
-                    d.text((n_x, n_y), fix_arabic(row[name_col]), fill=hex_to_rgb(n_color), font=font_n, anchor="mm")
-                    if show_g:
-                        d.text((g_x, g_y), fix_arabic(row[g_col]), fill=hex_to_rgb(g_color), font=font_g, anchor="mm")
-                    all_pdfs.append(img)
-                    bar.progress((i+1)/len(df))
+            for i, photo_file in enumerate(uploaded_photos):
+                # فتح ومعالجة كل صورة
+                photo = Image.open(photo_file).convert("RGBA")
+                # تغيير مقاس الفريم ليناسب الصورة
+                resized_frame = processed_frame.resize(photo.size, Image.Resampling.LANCZOS)
+                photo.alpha_composite(resized_frame)
                 
-                out = io.BytesIO()
-                all_pdfs[0].save(out, format="PDF", save_all=True, append_images=all_pdfs[1:])
-                st.download_button("📥 تحميل الـ PDF", out.getvalue(), "Certs.pdf")
+                # تحويل لـ RGB وحفظ في الـ ZIP
+                final_img = photo.convert("RGB")
+                img_byte_arr = io.BytesIO()
+                final_img.save(img_byte_arr, format='JPEG', quality=85)
+                
+                zip_file.writestr(photo_file.name, img_byte_arr.getvalue())
+                
+                # تحديث الـ UI
+                bar.progress((i + 1) / len(uploaded_photos))
+                status.text(f"جاري معالجة: {photo_file.name}")
 
-# --- Tab 2: برواز الصور ---
-with tab2:
-    st.header("إضافة برواز لصور الحفلة")
-    f_file = st.file_uploader("1. ارفع الفريم (الأسود سيختفي)", type=['jpg', 'jpeg', 'png'], key="frm")
-    photos = st.file_uploader("2. ارفع الصور (يمكنك رفع عدد كبير)", type=['jpg','png','jpeg'], accept_multiple_files=True)
-    
-    if f_file and photos:
-        # معالجة الفريم (شفافية الأسود)
-        frame_raw = Image.open(f_file).convert("RGBA")
-        datas = frame_raw.getdata()
-        new_data = []
-        for item in datas:
-            if item[0] < 45 and item[1] < 45 and item[2] < 45: new_data.append((0,0,0,0))
-            else: new_data.append(item)
-        frame_raw.putdata(new_data)
-        
-        st.image(photos[0], width=300, caption="عينة قبل")
-        
-        if st.button("🚀 ابدأ معالجة الصور وعمل ZIP"):
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zip_file:
-                bar = st.progress(0)
-                for i, p_file in enumerate(photos):
-                    p_img = Image.open(p_file).convert("RGBA")
-                    f_resized = frame_raw.resize(p_img.size, Image.Resampling.LANCZOS)
-                    p_img.alpha_composite(f_resized)
-                    
-                    final = p_img.convert("RGB")
-                    img_byte = io.BytesIO()
-                    final.save(img_byte, format="JPEG", quality=85)
-                    zip_file.writestr(p_file.name, img_byte.getvalue())
-                    bar.progress((i+1)/len(photos))
-            
-            st.success("تم الانتهاء!")
-            st.download_button("📥 تحميل كل الصور (ZIP)", zip_buffer.getvalue(), "Branded_Photos.zip")
+        st.success("✨ تم الانتهاء من جميع الصور!")
+        st.download_button(
+            label="📥 تحميل كل الصور المبروزة (ZIP)",
+            data=zip_buffer.getvalue(),
+            file_name="Branded_Photos.zip",
+            mime="application/zip"
+        )
+else:
+    st.warning("يرجى رفع الفريم والصور للبدء.")
