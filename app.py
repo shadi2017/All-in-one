@@ -130,8 +130,8 @@ with tab2:
             st.image(sample_p.convert("RGB"), caption="معاينة")
             
             if st.button("🚀 معالجة الصور (ZIP)"):
-                zip_buf = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer := io.BytesIO(), "w", zipfile.ZIP_DEFLATED) as z:
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as z:
                     bar = st.progress(0)
                     for i, pf in enumerate(photos):
                         p_img = Image.open(pf).convert("RGBA")
