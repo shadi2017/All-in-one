@@ -5,97 +5,100 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 import io
 import zipfile
-import os
+import requests
 
-# --- وظائف المعالجة الأساسية ---
+# --- قائمة الخطوط العربية الأونلاين ---
+FONTS_URLS = {
+    "Cairo (Bold)": "https://github.com/google/fonts/raw/main/ofl/cairo/Cairo%5Bwght%5D.ttf",
+    "Almarai (Regular)": "https://github.com/google/fonts/raw/main/ofl/almarai/Almarai-Regular.ttf",
+    "Tajawal (Medium)": "https://github.com/google/fonts/raw/main/ofl/tajawal/Tajawal-Medium.ttf",
+    "Amiri (Regular)": "https://github.com/google/fonts/raw/main/ofl/amiri/Amiri-Regular.ttf",
+    "Simplified Arabic": "https://github.com/Nordin-Nabil/fonts/raw/master/simplified-arabic.ttf"
+}
 
+# وظيفة لتحميل الخط من الإنترنت وعمل Cache له عشان السرعة
+@st.cache_data
+def download_font(url):
+    response = requests.get(url)
+    return response.content
+
+# وظيفة معالجة العربي
 def fix_arabic(text):
-    """تصحيح اللغة العربية لتظهر متصلة ومن اليمين للشمال"""
     if pd.isna(text) or str(text).strip() == "": return ""
-    reshaper = arabic_reshaper.ArabicReshaper(configuration={
-        'delete_harakat': False, 'support_ligatures': True, 'arabic': True
-    })
+    reshaper = arabic_reshaper.ArabicReshaper(configuration={'delete_harakat': False, 'support_ligatures': True, 'arabic': True})
     return get_display(reshaper.reshape(str(text)))
 
+def hex_to_rgb(h):
+    return tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+
 def make_black_transparent(img_pil):
-    """تحويل المساحات السوداء في الفريم لشفافة للحفاظ على صورة الحفلة"""
     img = img_pil.convert("RGBA")
     datas = img.getdata()
     new_data = []
     for item in datas:
-        # إذا كان اللون أسود أو قريب جداً منه (RGB < 45)، نجعله شفافاً
-        if item[0] < 45 and item[1] < 45 and item[2] < 45:
-            new_data.append((0, 0, 0, 0))
-        else:
-            new_data.append(item)
+        if item[0] < 45 and item[1] < 45 and item[2] < 45: new_data.append((0, 0, 0, 0))
+        else: new_data.append(item)
     img.putdata(new_data)
     return img
 
-def hex_to_rgb(h):
-    """تحويل كود اللون من الويب لـ RGB"""
-    return tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+# --- إعدادات الصفحة ---
+st.set_page_config(page_title="المساعد الذكي للميديا", layout="wide")
+st.title("🚀 المساعد الذكي المطور (خطوط أونلاين)")
 
-# --- إعدادات واجهة المستخدم ---
-st.set_page_config(page_title="المساعد الذكي للميديا", layout="wide", page_icon="🚀")
-
-st.title("🚀 المساعد الذكي: شهادات + برواز حفلات")
-st.markdown("سكريبت واحد لكل المهام - يدعم اللغة العربية وجودة عالية")
-
-# إنشاء التبويبات (Tabs)
-tab1, tab2 = st.tabs(["🎓 صانع الشهادات الذكي", "📸 برواز الصور المجمع"])
+tab1, tab2 = st.tabs(["🎓 صانع الشهادات", "📸 برواز الصور"])
 
 # --- TAB 1: صانع الشهادات ---
 with tab1:
-    st.header("إصدار شهادات مجمع (PDF)")
+    st.header("إصدار شهادات مجمع")
     c_col1, c_col2 = st.columns([1, 2])
     
     with c_col1:
-        st.subheader("📁 رفع الملفات")
-        cert_tpl = st.file_uploader("1. صورة الشهادة (Template)", type=['png', 'jpg', 'jpeg'], key="cert_tpl")
-        cert_data = st.file_uploader("2. شيت البيانات (Excel/CSV)", type=['xlsx', 'csv'], key="cert_data")
-        cert_font = st.file_uploader("3. ملف الخط العربي (TTF)", type=['ttf'], key="cert_font")
+        st.subheader("📁 1. الملفات")
+        cert_tpl = st.file_uploader("ارفع صورة الشهادة", type=['png', 'jpg', 'jpeg'], key="c1")
+        cert_data = st.file_uploader("ارفع شيت البيانات", type=['xlsx', 'csv'], key="c2")
         
-        if cert_tpl and cert_data and cert_font:
+        st.subheader("✒️ 2. الخط العربي")
+        font_mode = st.radio("مصدر الخط:", ["اختيار خط أونلاين", "رفع خط من جهازي"])
+        
+        fnt_bytes = None
+        if font_mode == "اختيار خط أونلاين":
+            font_choice = st.selectbox("اختر الخط المفضل:", list(FONTS_URLS.keys()))
+            fnt_bytes = download_font(FONTS_URLS[font_choice])
+        else:
+            uploaded_fnt = st.file_uploader("ارفع ملف الخط (TTF)", type=['ttf'], key="c3")
+            if uploaded_fnt: fnt_bytes = uploaded_fnt.read()
+
+        if cert_tpl and cert_data and fnt_bytes:
             df = pd.read_excel(cert_data) if cert_data.name.endswith('.xlsx') else pd.read_csv(cert_data)
-            fnt_bytes = cert_font.read()
             
             st.divider()
-            st.subheader("📍 إعدادات النصوص")
-            name_col = st.selectbox("اختر عمود الأسماء", df.columns)
-            n_x = st.number_input("الاسم - أفقي X", value=500)
-            n_y = st.number_input("الاسم - رأسي Y", value=350)
-            n_size = st.slider("حجم خط الاسم", 10, 300, 70)
-            n_clr = st.color_picker("لون خط الاسم", "#000000")
+            name_col = st.selectbox("عمود الأسماء", df.columns)
+            n_x = st.number_input("الاسم X", value=500)
+            n_y = st.number_input("الاسم Y", value=350)
+            n_size = st.slider("حجم الخط", 10, 300, 70)
+            n_clr = st.color_picker("لون الخط", "#000000")
             
-            st.divider()
-            use_grade = st.checkbox("إضافة تقدير/درجة؟")
+            use_grade = st.checkbox("إضافة تقدير؟")
             g_col, g_x, g_y, g_size, g_clr = None, 0, 0, 40, "#000000"
             if use_grade:
-                g_col = st.selectbox("اختر عمود التقدير", df.columns)
-                g_x = st.number_input("التقدير - أفقي X", value=500)
-                g_y = st.number_input("التقدير - رأسي Y", value=450)
-                g_size = st.slider("حجم خط التقدير", 10, 200, 50)
+                g_col = st.selectbox("عمود التقدير", df.columns)
+                g_x = st.number_input("التقدير X", value=500)
+                g_y = st.number_input("التقدير Y", value=450)
+                g_size = st.slider("حجم التقدير", 10, 200, 50)
                 g_clr = st.color_picker("لون التقدير", "#333333")
 
     with c_col2:
-        if cert_tpl and cert_data and cert_font:
-            st.subheader("👁️ معاينة حية")
-            # تجهيز المعاينة
+        if cert_tpl and cert_data and fnt_bytes:
             p_img = Image.open(cert_tpl).convert("RGB")
             draw = ImageDraw.Draw(p_img)
             f_n = ImageFont.truetype(io.BytesIO(fnt_bytes), n_size)
-            
-            # رسم الاسم
             draw.text((n_x, n_y), fix_arabic(df.iloc[0][name_col]), fill=hex_to_rgb(n_clr), font=f_n, anchor="mm")
-            
-            # رسم التقدير
             if use_grade:
                 f_g = ImageFont.truetype(io.BytesIO(fnt_bytes), g_size)
                 draw.text((g_x, g_y), fix_arabic(df.iloc[0][g_col]), fill=hex_to_rgb(g_clr), font=f_g, anchor="mm")
+            st.image(p_img, caption="معاينة حية")
             
-            st.image(p_img, use_container_width=True, caption="شكل الشهادة النهائي")
-            
-            if st.button("🚀 إصدار كل الشهادات الآن"):
+            if st.button("🚀 إصدار الشهادات (PDF)"):
                 pdf_list = []
                 p_bar = st.progress(0)
                 for i, row in df.iterrows():
@@ -106,57 +109,36 @@ with tab1:
                         d.text((g_x, g_y), fix_arabic(row[g_col]), fill=hex_to_rgb(g_clr), font=f_g, anchor="mm")
                     pdf_list.append(img)
                     p_bar.progress((i+1)/len(df))
-                
-                pdf_buf = io.BytesIO()
-                pdf_list[0].save(pdf_buf, format="PDF", save_all=True, append_images=pdf_list[1:])
-                st.success("✅ تم التجهيز بنجاح!")
-                st.download_button("📥 تحميل ملف الـ PDF المجمع", pdf_buf.getvalue(), "Certificates.pdf")
+                out = io.BytesIO()
+                pdf_list[0].save(out, format="PDF", save_all=True, append_images=pdf_list[1:])
+                st.download_button("📥 تحميل الـ PDF", out.getvalue(), "Certificates.pdf")
 
-# --- TAB 2: برواز الحفلات ---
+# --- TAB 2: برواز الصور ---
 with tab2:
-    st.header("إضافة برواز اللوجو للصور (Batch Processing)")
-    st.info("البرنامج سيقوم بمط الفريم ليناسب كل صورة (طولاً أو عرضاً) أوتوماتيكياً مع الحفاظ على أعلى جودة.")
-    
+    st.header("إضافة برواز اللوجو للصور")
     f_col1, f_col2 = st.columns([1, 2])
     with f_col1:
-        st.subheader("📁 الملفات")
-        frame_file = st.file_uploader("1. ارفع صورة الفريم", type=['png', 'jpg', 'jpeg'], key="frame_file")
-        photos = st.file_uploader("2. ارفع صور الحفلة (يمكن رفع عدد كبير)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key="photos")
-        quality = st.slider("جودة الصور الناتجة (تأثير على المساحة)", 50, 100, 90)
-
+        f_file = st.file_uploader("1. ارفع الفريم", type=['png', 'jpg', 'jpeg'], key="f1")
+        photos = st.file_uploader("2. ارفع الصور", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key="f2")
     with f_col2:
-        if frame_file and photos:
-            # معالجة الفريم (تحويل الأسود لشفاف)
-            with st.spinner("جاري تجهيز الفريم..."):
-                raw_f = Image.open(frame_file)
-                processed_f = make_black_transparent(raw_f)
-            
-            st.subheader("👁️ معاينة")
-            # فتح أول صورة للمعاينة
+        if f_file and photos:
+            raw_f = Image.open(f_file)
+            proc_f = make_black_transparent(raw_f)
             sample_p = Image.open(photos[0]).convert("RGBA")
-            # تغيير مقاس الفريم ليناسب مقاس الصورة بدقة عالية
-            res_f = processed_f.resize(sample_p.size, Image.Resampling.LANCZOS)
+            res_f = proc_f.resize(sample_p.size, Image.Resampling.LANCZOS)
             sample_p.alpha_composite(res_f)
-            st.image(sample_p.convert("RGB"), caption="شكل الصورة بعد البروزة", use_container_width=True)
-
-            if st.button("🚀 ابدأ معالجة الصور وعمل ملف ZIP"):
+            st.image(sample_p.convert("RGB"), caption="معاينة")
+            
+            if st.button("🚀 معالجة الصور (ZIP)"):
                 zip_buf = io.BytesIO()
-                with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                    f_bar = st.progress(0)
-                    status_txt = st.empty()
-                    for i, p_file in enumerate(photos):
-                        status_txt.text(f"جاري معالجة: {p_file.name}")
-                        p_img = Image.open(p_file).convert("RGBA")
-                        # مط الفريم ليناسب مقاس كل صورة (سواء Portrait أو Landscape)
-                        f_res = processed_f.resize(p_img.size, Image.Resampling.LANCZOS)
-                        p_img.alpha_composite(f_res)
-                        
-                        final = p_img.convert("RGB")
+                with zipfile.ZipFile(zip_buffer := io.BytesIO(), "w", zipfile.ZIP_DEFLATED) as z:
+                    bar = st.progress(0)
+                    for i, pf in enumerate(photos):
+                        p_img = Image.open(pf).convert("RGBA")
+                        fr = proc_f.resize(p_img.size, Image.Resampling.LANCZOS)
+                        p_img.alpha_composite(fr)
                         img_io = io.BytesIO()
-                        # حفظ بأعلى جودة لتقليل البكسلة
-                        final.save(img_io, format="JPEG", quality=quality, subsampling=0)
-                        zip_file.writestr(p_file.name, img_io.getvalue())
-                        f_bar.progress((i+1)/len(photos))
-                
-                st.success("✅ تمت المعالجة بنجاح!")
-                st.download_button("📥 تحميل كل الصور المبروزة (ZIP)", zip_buf.getvalue(), "Branded_Photos.zip")
+                        p_img.convert("RGB").save(img_io, format="JPEG", quality=90)
+                        z.writestr(pf.name, img_io.getvalue())
+                        bar.progress((i+1)/len(photos))
+                st.download_button("📥 تحميل الـ ZIP", zip_buffer.getvalue(), "Photos.zip")
